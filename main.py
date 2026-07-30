@@ -1,128 +1,97 @@
-import streamlit as st
-
-# Streamlit 설정은 모든 라이브러리/코드 중 무조건 최상단 실행
-st.set_page_config(
-    page_title="충남 청소년 인구 비율 지도",
-    page_layout="wide"
-)
-
-import pandas as pd
+import re
 import requests
+import pandas as pd
+import streamlit as st
 import plotly.express as px
 
-st.title("🗺️ 충청남도 시군구별 청소년(10~19세) 인구 비율 지도")
-st.caption("최신 연도 데이터 기준 시군구별 10세 이상 20세 미만 인구 비율을 5단계로 나타냅니다.")
+st.set_page_config(page_title="전국 고령화 지도", layout="wide")
+st.title("🗺️ 전국 고령화 지도")
+st.caption("시군구별 65세 이상 인구 비율 (행정안전부 주민등록 인구)")
 
-# 1. 데이터 불러오기 함수
-@st.cache_data
-def load_data():
-    pop_url = "https://raw.githubusercontent.com/greatsong/modudata/main/data/population_yearly.csv.gz"
-    df = pd.read_csv(pop_url, compression='gzip', dtype={'코드': str})
-    
-    geo_url = "https://raw.githubusercontent.com/greatsong/modudata/main/data/boundaries/sigungu_kr.geojson"
-    geojson = requests.get(geo_url).json()
-    
-    return df, geojson
+POP_URL = "https://raw.githubusercontent.com/greatsong/modudata/main/data/population_yearly.csv.gz"
+GEO_URL = "https://raw.githubusercontent.com/greatsong/modudata/main/data/boundaries/sigungu_kr.geojson"
 
-with st.spinner("데이터를 불러오는 중입니다..."):
-    df_raw, geojson_data = load_data()
 
-# 2. 데이터 전처리
-latest_year = df_raw['연도'].max()
-df_cn = df_raw[(df_raw['연도'] == latest_year) & (df_raw['시도'] == '충청남도')].copy()
+@st.cache_data(show_spinner="인구 데이터를 불러오는 중입니다...")
+def load_population():
+    return pd.read_csv(POP_URL, dtype={"코드": str})
 
-# 시군구 코드 (앞 5자리)
-df_cn['sigungu_code'] = df_cn['코드'].str[:5]
 
-# 10세 이상 20세 미만 인구 열 목록
-age_cols_10_19 = [f'계_{i}세' for i in range(10, 20)]
-all_total_cols = [col for col in df_cn.columns if col.startswith('계_')]
+@st.cache_data(show_spinner="지도 경계를 불러오는 중입니다...")
+def load_geojson():
+    return requests.get(GEO_URL, timeout=30).json()
 
-# 시군구 합산
-df_grouped = df_cn.groupby(['sigungu_code', '시도', '시군구'], as_index=False)[all_total_cols].sum()
 
-df_grouped['총인구'] = df_grouped[all_total_cols].sum(axis=1)
-df_grouped['청소년인구'] = df_grouped[age_cols_10_19].sum(axis=1)
-df_grouped['청소년비율'] = (df_grouped['청소년인구'] / df_grouped['총인구']) * 100
-df_grouped['청소년비율_표시'] = df_grouped['청소년비율'].round(2)
+df = load_population()
+geojson = load_geojson()
 
-# 3. 5단계 구간 나누기
-bins = [0, 19, 23, 28, 38, 100]
-labels = ['19% 미만', '19% 이상 ~ 23% 미만', '23% 이상 ~ 28% 미만', '28% 이상 ~ 38% 미만', '38% 이상']
+latest_year = int(df["연도"].max())
+df = df[df["연도"] == latest_year].copy()
 
-df_grouped['비율구간'] = pd.cut(
-    df_grouped['청소년비율'], 
-    bins=bins, 
-    labels=labels, 
-    right=False
-)
+total_cols = [c for c in df.columns if c.startswith("계_")]
 
-# 4. GeoJSON 충남지역 추출
-cn_codes = set(df_grouped['sigungu_code'])
-filtered_features = [
-    feat for feat in geojson_data['features'] 
-    if feat['properties']['코드'] in cn_codes
-]
-cn_geojson = {
-    "type": "FeatureCollection",
-    "features": filtered_features
+
+def age_of(col):
+    m = re.match(r"계_(\d+)세", col)
+    return int(m.group(1)) if m else None
+
+
+elderly_cols = [c for c in total_cols if age_of(c) is not None and age_of(c) >= 65]
+
+df["전체인구"] = df[total_cols].sum(axis=1)
+df["고령인구"] = df[elderly_cols].sum(axis=1)
+
+df["시군구코드"] = df["코드"].str[:5]
+grouped = df.groupby("시군구코드")[["전체인구", "고령인구"]].sum().reset_index()
+grouped["고령화율"] = (grouped["고령인구"] / grouped["전체인구"] * 100).round(2)
+
+names = pd.DataFrame([
+    {
+        "시군구코드": str(f["properties"]["코드"]),
+        "시군구": f["properties"]["시군구"],
+        "시도": f["properties"]["시도"],
+    }
+    for f in geojson["features"]
+])
+merged = grouped.merge(names, on="시군구코드", how="left")
+
+BINS = [0, 19, 23, 28, 38, 100]
+LABELS = ["19% 미만", "19~23%", "23~28%", "28~38%", "38% 이상"]
+COLORS = {
+    "19% 미만": "#fee6ce",
+    "19~23%": "#fdc086",
+    "23~28%": "#f79646",
+    "28~38%": "#e8590c",
+    "38% 이상": "#a63603",
 }
+merged["단계"] = pd.cut(merged["고령화율"], bins=BINS, labels=LABELS, right=False)
 
-# 5. 지도 생성
-color_discrete_map = {
-    '19% 미만': '#edf8fb',
-    '19% 이상 ~ 23% 미만': '#b2e2e2',
-    '23% 이상 ~ 28% 미만': '#66c2a4',
-    '28% 이상 ~ 38% 미만': '#2ca25f',
-    '38% 이상': '#006d2c'
-}
-
-fig = px.choropleth_mapbox(
-    df_grouped,
-    geojson=cn_geojson,
-    locations='sigungu_code',
-    featureidkey='properties.코드',
-    color='비율구간',
-    color_discrete_map=color_discrete_map,
-    category_orders={'비율구간': labels},
-    hover_name='시군구',
-    hover_data={
-        '시도': True,
-        '청소년비율_표시': True,
-        'sigungu_code': False,
-        '비율구간': False
-    },
-    labels={'청소년비율_표시': '청소년 비율(%)'},
-    mapbox_style="white-bg",
-    center={"lat": 36.5184, "lon": 126.8000},
-    zoom=8.2,
-    opacity=0.8
+fig = px.choropleth(
+    merged,
+    geojson=geojson,
+    locations="시군구코드",
+    featureidkey="properties.코드",
+    color="단계",
+    category_orders={"단계": LABELS},
+    color_discrete_map=COLORS,
+    hover_name="시군구",
+    hover_data={"고령화율": True, "시도": True, "시군구코드": False, "단계": False},
+    labels={"고령화율": "65세 이상 비율(%)"},
 )
-
-fig.update_traces(marker_line_width=1, marker_line_color="black")
+fig.update_geos(fitbounds="locations", visible=False)
 fig.update_layout(
-    margin={"r":0, "t":10, "l":0, "b":0},
-    legend_title_text="청소년 비율 구간",
-    height=550
+    margin=dict(l=0, r=0, t=10, b=0),
+    height=700,
+    legend_title_text=f"65세 이상 비율 ({latest_year}년)",
 )
 
-st.subheader(f"📌 {latest_year}년 충청남도 시군구별 청소년 인구 비율")
-st.plotly_chart(fig, use_container_width=True)
+st.plotly_chart(fig, width="stretch")
 
-# 6. 상위/하위 10개 표
-st.markdown("---")
-
-df_display = df_grouped[['시도', '시군구', '청소년비율_표시', '총인구', '청소년인구']].copy()
-df_display.columns = ['시도', '시군구', '청소년 비율(%)', '총 인구수', '청소년 인구수']
-
-col1, col2 = st.columns(2)
-
-with col1:
-    st.subheader("🔝 청소년 비율 높은 곳 TOP 10")
-    top_10 = df_display.sort_values(by='청소년 비율(%)', ascending=False).head(10).reset_index(drop=True)
-    st.dataframe(top_10, use_container_width=True)
-
-with col2:
-    st.subheader("🔻 청소년 비율 낮은 곳 TOP 10")
-    bottom_10 = df_display.sort_values(by='청소년 비율(%)', ascending=True).head(10).reset_index(drop=True)
-    st.dataframe(bottom_10, use_container_width=True)
+c1, c2 = st.columns(2)
+cols = ["시도", "시군구", "고령화율"]
+with c1:
+    st.subheader("🔴 고령화율 높은 곳 10")
+    st.dataframe(merged.nlargest(10, "고령화율")[cols].reset_index(drop=True))
+with c2:
+    st.subheader("🟢 고령화율 낮은 곳 10")
+    st.dataframe(merged.nsmallest(10, "고령화율")[cols].reset_index(drop=True))
