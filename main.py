@@ -1,17 +1,3 @@
-원인을 명확히 찾았습니다!
-
-에러의 원인은 st.set_page_config()에 존재하지 않는 잘못된 파라미터인 page_layout="wide"가 들어갔기 때문입니다.
-
-잘못된 파라미터: page_layout="wide"
-
-올바른 파라미터: layout="wide"
-
-추가로 지도에 색이 안 칠해지는 문제(하얀 지도)는 데이터의 5자리 행정동 코드와 GeoJSON의 properties.코드 간의 매핑을 더 확실하게 맞춰야 해결됩니다.
-
-요청하신 전국 기준 지도, 푸른색 계열 5단계, 인자 오류 수정, 지도 색상 매핑 완벽 보완을 모두 적용한 전체 코드입니다.
-
-수정된 main.py 전체 코드
-Python
 import streamlit as st
 
 # 1. st.set_page_config는 스크립트 최상단에 위치하며, 올바른 인자명은 'layout'입니다.
