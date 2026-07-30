@@ -1,19 +1,20 @@
 import streamlit as st
-import pandas as pd
-import requests
-import json
 
-# Streamlit 페이지 설정
+# Streamlit 최상단 설정은 반드시 최상위에 위치해야 합니다!
 st.set_page_config(
     page_title="충남 청소년 인구 비율 지도",
     page_layout="wide"
 )
 
+import pandas as pd
+import requests
+import plotly.express as px
+
 st.title("🗺️ 충청남도 시군구별 청소년(10~19세) 인구 비율 지도")
 st.caption("최신 연도 데이터 기준 시군구별 10세 이상 20세 미만 인구 비율을 5단계로 나타냅니다.")
 
 # -----------------------------------------------------------------------------
-# 1. 데이터 불러오기 함수 (캐싱 적용으로 속도 향상)
+# 1. 데이터 불러오기 함수 (캐싱 적용)
 # -----------------------------------------------------------------------------
 @st.cache_data
 def load_data():
@@ -80,10 +81,8 @@ df_grouped['비율구간'] = pd.cut(
 # -----------------------------------------------------------------------------
 # 4. Plotly 지도가 인식할 수 있도록 GeoJSON 필터링
 # -----------------------------------------------------------------------------
-# 충남 시군구 코드 목록 추출
 cn_codes = set(df_grouped['sigungu_code'])
 
-# GeoJSON에서 충남 지역만 추출
 filtered_features = [
     feat for feat in geojson_data['features'] 
     if feat['properties']['코드'] in cn_codes
@@ -96,8 +95,6 @@ cn_geojson = {
 # -----------------------------------------------------------------------------
 # 5. Plotly 지도 생성
 # -----------------------------------------------------------------------------
-import plotly.express as px
-
 # 범주형 색상 팔레트 (연한 색 -> 진한 색)
 color_discrete_map = {
     '19% 미만': '#edf8fb',
@@ -146,7 +143,6 @@ st.plotly_chart(fig, use_container_width=True)
 # -----------------------------------------------------------------------------
 st.markdown("---")
 
-# 보여줄 열 정리
 df_display = df_grouped[['시도', '시군구', '청소년비율_표시', '총인구', '청소년인구']].copy()
 df_display.columns = ['시도', '시군구', '청소년 비율(%)', '총 인구수', '청소년 인구수']
 
